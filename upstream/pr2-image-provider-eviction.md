@@ -35,7 +35,7 @@ The provider is still per recorder and is only used on the recorder's thread, so
 - Combined with PR1 and PR3 (plus the Android MSAA line): Android arm64 ✅ and iOS device Release (`xcodebuild`) ✅.
 - In `packages/skia` on this branch: `yarn tsc` ✅, `yarn lint` ✅, `yarn test` ✅ (810 passed, 87 skipped). This PR changes C++ only.
 - clang-format (23.1.3, default style like `yarn clang-format`) applied to the changed files.
-- Device measurements above are with PR1+PR2+PR3 together; this PR was not measured on its own. TODO if maintainers want the split.
+- Device measurements above are with PR1+PR2+PR3 together; this PR was not measured on its own; happy to measure it separately if useful.
 
 ## Suggested checks for maintainers
 

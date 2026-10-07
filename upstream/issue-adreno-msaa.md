@@ -16,7 +16,7 @@ The only workaround we found is to turn off Graphite's internal MSAA (`ContextOp
 
 ## Repro
 
-Repo: `<TODO: link to the skia-memory-repro repo>`. Both scenarios use the library the standard way:
+Repo: https://github.com/pranav2012/skia-memory-repro. Both scenarios use the library the standard way:
 
 - `skiarepro://run?s=pattern&p=dash`: one full-screen Canvas with stroked arcs rebuilt each frame by `usePathValue`, a `DashPathEffect` with an animated phase, and a pulsing stroked `Circle`. Code is in the GPU memory issue.
 - `skiarepro://run?s=paths`: one full-screen Canvas with a single filled, self-intersecting 97-point star spanning the screen, rotated by a `Group` transform driven by a shared value.

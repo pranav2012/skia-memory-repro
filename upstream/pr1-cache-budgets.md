@@ -49,10 +49,10 @@ The budget is a soft limit. Resources still in use are never purged, so a frame 
 - clang-format (23.1.3, default style like `yarn clang-format`; `main` itself is unchanged by it) applied to every changed C++ file.
 - Compiled on its own against the 3.0.8 sources (identical to `main` for these files) in a release build of the repro: Android arm64 (`./gradlew assembleRelease`) ✅. Combined with PR2 and PR3 (plus the Android MSAA line): Android arm64 ✅ and iOS device Release (`xcodebuild`) ✅.
 - `git submodule update` / `yarn copy-skia-headers` not run: the headers shipped in the npm package were enough to compile.
-- Device measurements: the numbers above (Samsung) come from the same code before clang-format. The 128 MB and 8 MB rows used this PR with the budget changed. The 32 MB row was measured with PR1+PR2+PR3 together (PR2/PR3 don't touch the path workload). iOS with this change: pending (TODO).
+- Device measurements: the numbers above (Samsung) come from the same code before clang-format. The 128 MB and 8 MB rows used this PR with the budget changed. The 32 MB row was measured with PR1+PR2+PR3 together (PR2/PR3 don't touch the path workload). iOS: the path scenario does not grow without this change (see the issue), so it was not re-measured with it.
 
 ## Suggested checks for maintainers
 
 - e2e (`apps/example`, Tests screen, `yarn e2e`): no visual change expected.
 - Manual: example screens with many animated canvases or paths on an Android device. Compare `adb shell dumpsys meminfo <pkg>` `GL mtrack` before and after.
-- The repro (`<TODO link>`), or the same `dashN` scenario as an `apps/example` screen if you'd rather keep it in the repo.
+- The repro (https://github.com/pranav2012/skia-memory-repro), or the same `dashN` scenario as an `apps/example` screen if you'd rather keep it in the repo.

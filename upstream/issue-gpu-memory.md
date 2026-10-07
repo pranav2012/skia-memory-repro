@@ -17,7 +17,7 @@ Lowering the per-recorder budget fixes it: with a 32 MB budget, 3 canvases use 1
 
 ## Minimal repro
 
-Repo: `<TODO: link to the skia-memory-repro repo>`. Alternatively this could be a screen in `apps/example`; the repro is a single file and ports easily.
+Repo: https://github.com/pranav2012/skia-memory-repro. Alternatively this could be a screen in `apps/example`; the repro is a single file and ports easily.
 
 The repro uses the library the standard way: one full-screen `<Canvas>`, paths built with `usePathValue` from a Reanimated clock, and nothing created or leaked per frame on the JS side.
 
@@ -26,7 +26,7 @@ function DashPattern({ width, height }: { width: number; height: number }) {
   const time = useTime(); // useFrameCallback -> shared value in seconds
   const arc = (builder: SkPathBuilder, offset: number) => {
     "worklet";
-    const t = time.value * 0.4 + offset;
+    const t = time.get() * 0.4 + offset;
     for (let i = 0; i <= 48; i++) {
       const s = i / 48;
       const x = width * (0.1 + 0.8 * s);
@@ -36,7 +36,7 @@ function DashPattern({ width, height }: { width: number; height: number }) {
   };
   const legs = usePathValue((b) => { "worklet"; arc(b, 0); arc(b, 1.5); });
   const next = usePathValue((b) => { "worklet"; arc(b, 3); });
-  const march = useDerivedValue(() => 12 - ((time.value * 30) % 12));
+  const march = useDerivedValue(() => 12 - ((time.get() * 30) % 12));
   return (
     <>
       <Fill color="#0b1020" />
@@ -138,7 +138,7 @@ A single animated canvas sits at about 104 MB. "With fix" everywhere in this sec
 
 ### iOS
 
-On iPhone 16 Plus (Metal, default MSAA), the path scenario does **not** reproduce: 3 dash canvases stay at 104 → 107 MB phys_footprint over 90 s. One uniform-only canvas goes from 102 to 107 MB over 13 min. With MSAA on, Graphite renders these paths without the per-frame churn seen through the Android MSAA-off path. The recorder budgets are still 256 MB on iOS, so other content could fill them the same way; we did not find such content.
+On iPhone 16 Plus (Metal, default MSAA), the path scenario does **not** reproduce: 3 dash canvases stay at 104 → 107 MB phys_footprint over 90 s. One uniform-only canvas goes from 102 to 107 MB over 13 min. Our guess is that with MSAA on, Graphite renders these paths without the per-frame churn seen through the Android MSAA-off path. The recorder budgets are still 256 MB on iOS, so other content could fill them the same way; we did not find such content.
 
 ## Root cause (3.0.8 / `main`, `packages/skia/…`)
 
