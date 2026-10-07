@@ -1,6 +1,6 @@
 # fix(🖼️): drop GPU uploads of images that were released
 
-Refs #TODO-gpu-memory-issue
+Refs #4159
 
 ## Problem
 

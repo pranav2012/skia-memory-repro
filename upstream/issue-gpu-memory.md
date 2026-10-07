@@ -2,7 +2,7 @@
 
 ## Summary
 
-In v3 (Graphite/Dawn), every `<Canvas>` gets its own `skgpu::graphite::Recorder`. Neither the Recorder nor the Context gets a budget, so both use Skia's desktop default of 256 MB (`kDefaultRecorderBudget`, `kDefaultContextBudget`). With MSAA off on Android (the only workaround for the Adreno crash in #TODO-adreno-issue), drawing paths that change every frame churns GPU resources. Each frame's resources end up purgeable in the recorder's cache. Nothing purges them until the cache reaches its budget.
+In v3 (Graphite/Dawn), every `<Canvas>` gets its own `skgpu::graphite::Recorder`. Neither the Recorder nor the Context gets a budget, so both use Skia's desktop default of 256 MB (`kDefaultRecorderBudget`, `kDefaultContextBudget`). With MSAA off on Android (the only workaround for the Adreno crash in #4158), drawing paths that change every frame churns GPU resources. Each frame's resources end up purgeable in the recorder's cache. Nothing purges them until the cache reaches its budget.
 
 Each continuously animating Canvas that draws paths therefore settles at about 256 MB of GPU memory, and the cost adds up per canvas: 3 such canvases use 1.2–1.4 GB of `GL mtrack`. In a real app (several path canvases on one screen) we saw 2.1 GB, swap, and then a low-memory kill.
 

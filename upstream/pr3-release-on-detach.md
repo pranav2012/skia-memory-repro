@@ -1,6 +1,6 @@
 # fix(🤖): release a removed view's recorder without waiting for the Java finalizer
 
-Refs #TODO-gpu-memory-issue
+Refs #4159
 
 ## Problem
 

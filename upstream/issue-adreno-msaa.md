@@ -4,7 +4,7 @@
 
 On a Samsung Galaxy SM-S948B (Adreno, Vulkan), react-native-skia 3.0.8 crashes the app with SIGSEGV as soon as a `<Canvas>` draws animated stroked paths or a large filled path. The crash is inside the Adreno Vulkan driver's `vkCreateFramebuffer`, called from Dawn while Graphite begins a render pass.
 
-The only workaround we found is to turn off Graphite's internal MSAA (`ContextOptions::fInternalMultisampleCount = SampleCount::k1`). That workaround in turn sends paths through a code path that fills each canvas's 256 MB resource cache (see #TODO-gpu-memory-issue).
+The only workaround we found is to turn off Graphite's internal MSAA (`ContextOptions::fInternalMultisampleCount = SampleCount::k1`). That workaround in turn sends paths through a code path that fills each canvas's 256 MB resource cache (see #4159).
 
 ## Environment
 
@@ -88,7 +88,7 @@ The full tombstones for both crashes are in the repro at `results/android-unpatc
 
 ## Consequence of the workaround
 
-With MSAA off, the same path canvases use about 450 MB of `GL mtrack` each, and 3 of them use 1.2–1.4 GB, because the per-recorder cache fills to its 256 MB default. A small default recorder budget fixes that (#TODO-gpu-memory-issue / PR "cache budgets"). Until this crash is understood, Android apps that draw animated paths are stuck choosing between the crash and the memory cost unless both changes land.
+With MSAA off, the same path canvases use about 450 MB of `GL mtrack` each, and 3 of them use 1.2–1.4 GB, because the per-recorder cache fills to its 256 MB default. A small default recorder budget fixes that (#4159 / PR "cache budgets"). Until this crash is understood, Android apps that draw animated paths are stuck choosing between the crash and the memory cost unless both changes land.
 
 ## Possible directions
 

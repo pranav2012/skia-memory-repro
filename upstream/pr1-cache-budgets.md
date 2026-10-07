@@ -1,6 +1,6 @@
 # fix(🧠): give Graphite recorders a mobile-sized cache budget and purge unused resources
 
-Fixes #TODO-gpu-memory-issue
+Fixes #4159
 
 ## Problem
 
