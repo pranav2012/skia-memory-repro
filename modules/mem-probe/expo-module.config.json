@@ -1,0 +1,5 @@
+{
+  "platforms": ["android", "apple"],
+  "apple": { "modules": ["MemProbeModule"], "podspecPath": "MemProbe.podspec" },
+  "android": { "modules": ["expo.modules.memprobe.MemProbeModule"] }
+}

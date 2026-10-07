@@ -1,0 +1,11 @@
+elapsed_s,scenario,phase,app_state,footprint_mb,graphics_mb
+0,dash-3,start,inactive,28.1,-0.0
+10,dash-3,start,active,104.1,-0.0
+20,dash-3,start,active,104.3,-0.0
+30,dash-3,start,active,105.1,-0.0
+40,dash-3,start,active,105.4,-0.0
+50,dash-3,start,active,105.5,-0.0
+60,dash-3,start,active,105.8,-0.0
+70,dash-3,start,active,106.5,-0.0
+80,dash-3,start,active,106.7,-0.0
+90,dash-3,start,active,107.0,-0.0

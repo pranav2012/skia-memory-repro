@@ -1,0 +1,461 @@
+diff --git a/cpp/api/JsiSkApi.h b/cpp/api/JsiSkApi.h
+index 1f4e1a8..6de3cb9 100644
+--- a/cpp/api/JsiSkApi.h
++++ b/cpp/api/JsiSkApi.h
+@@ -165,6 +165,32 @@ public:
+         runtime, reinterpret_cast<uint64_t>(dawnContext.getWGPUDevice().Get()));
+   }
+ 
++  JSI_HOST_FUNCTION(setResourceCacheLimits) {
++    // { recorderBytes?: number, contextBytes?: number }: a missing value keeps
++    // the current budget.
++    auto &dawnContext = DawnContext::getInstance();
++    auto limits = arguments[0].asObject(runtime);
++    auto readBytes = [&](const char *name, size_t current) -> size_t {
++      auto value = limits.getProperty(runtime, name);
++      if (value.isUndefined()) {
++        return current;
++      }
++      auto bytes = value.asNumber();
++      if (!(bytes >= 0)) {
++        throw jsi::JSError(runtime, std::string("setResourceCacheLimits: ") +
++                                        name +
++                                        " must be a non-negative number");
++      }
++      return static_cast<size_t>(bytes);
++    };
++    auto recorderBytes =
++        readBytes("recorderBytes", dawnContext.getRecorderBudget());
++    auto contextBytes =
++        readBytes("contextBytes", dawnContext.getContextBudget());
++    dawnContext.setResourceCacheLimits(recorderBytes, contextBytes);
++    return jsi::Value::undefined();
++  }
++
+   JSI_HOST_FUNCTION(Recorder) {
+     return JsiRecorder::createCtor(getContext())(runtime, thisValue, arguments,
+                                                  count);
+@@ -230,6 +256,8 @@ public:
+   static void definePrototype(jsi::Runtime &runtime, jsi::Object &prototype) {
+     installHostMethod(runtime, prototype, "getNativeDevice",
+                       &JsiSkApi::getNativeDevice);
++    installHostMethod(runtime, prototype, "setResourceCacheLimits",
++                      &JsiSkApi::setResourceCacheLimits);
+     installHostMethod(runtime, prototype, "Font", &JsiSkApi::Font);
+     installHostMethod(runtime, prototype, "Paint", &JsiSkApi::Paint);
+     installHostMethod(runtime, prototype, "RSXform", &JsiSkApi::RSXform);
+diff --git a/cpp/rnskia/RNDawnContext.h b/cpp/rnskia/RNDawnContext.h
+index 27127bd..0224be2 100644
+--- a/cpp/rnskia/RNDawnContext.h
++++ b/cpp/rnskia/RNDawnContext.h
+@@ -1,5 +1,7 @@
+ #pragma once
+ 
++#include <atomic>
++#include <chrono>
+ #include <memory>
+ #include <mutex>
+ 
+@@ -49,6 +51,58 @@ public:
+     return instance;
+   }
+ 
++  /**
++   GPU resource cache budgets. Graphite keeps a cache per Recorder (each view
++   has its own) and one in the Context, both 256 MB by default. On a phone a
++   continuously animating view fills its cache and nothing ever trims it, so
++   the defaults are lower and resources left unused for
++   kPurgeResourcesUnusedFor are purged while drawing continues (see
++   performRecorderCleanup). A budget is a soft limit: resources still in use
++   are never purged.
++   */
++  static constexpr size_t kDefaultRecorderBudget = 32 * 1024 * 1024;
++  static constexpr size_t kDefaultContextBudget = 64 * 1024 * 1024;
++  static constexpr std::chrono::milliseconds kPurgeResourcesUnusedFor{5000};
++  static constexpr std::chrono::milliseconds kPurgeInterval{2000};
++
++  /**
++   Overrides the cache budgets: recorders pick up the new budget at their next
++   cleanup, the context right away.
++   */
++  void setResourceCacheLimits(size_t recorderBytes, size_t contextBytes) {
++    _recorderBudget = recorderBytes;
++    std::lock_guard<std::mutex> lock(_mutex);
++    fGraphiteContext->setMaxBudgetedBytes(contextBytes);
++  }
++
++  size_t getRecorderBudget() const { return _recorderBudget; }
++
++  size_t getContextBudget() {
++    std::lock_guard<std::mutex> lock(_mutex);
++    return fGraphiteContext->maxBudgetedBytes();
++  }
++
++  /**
++   Purges the recorder's resources left unused for kPurgeResourcesUnusedFor,
++   at most once per kPurgeInterval (tracked in lastCleanup). A recorder is not
++   thread safe: call this on the thread that records with it, between
++   recordings (e.g. right after snap()).
++   */
++  void
++  performRecorderCleanup(skgpu::graphite::Recorder *recorder,
++                         std::chrono::steady_clock::time_point &lastCleanup) {
++    auto now = std::chrono::steady_clock::now();
++    if (recorder == nullptr || now - lastCleanup < kPurgeInterval) {
++      return;
++    }
++    lastCleanup = now;
++    const size_t budget = _recorderBudget;
++    if (recorder->maxBudgetedBytes() != budget) {
++      recorder->setMaxBudgetedBytes(budget);
++    }
++    recorder->performDeferredCleanup(kPurgeResourcesUnusedFor);
++  }
++
+   sk_sp<SkImage> MakeRasterImage(sk_sp<SkImage> image) {
+     if (!image->isTextureBacked()) {
+       return image;
+@@ -87,6 +141,7 @@ public:
+     std::lock_guard<std::mutex> lock(_mutex);
+     skgpu::graphite::RecorderOptions options;
+     options.fImageProvider = ImageProvider::Make();
++    options.fGpuBudgetInBytes = _recorderBudget;
+     return fGraphiteContext->makeRecorder(options);
+   }
+ 
+@@ -114,6 +169,7 @@ public:
+       }
+     }
+     fGraphiteContext->submit();
++    performContextCleanupLocked();
+     return success;
+   }
+ 
+@@ -125,6 +181,7 @@ public:
+     info.fRecording = recording;
+     fGraphiteContext->insertRecording(info);
+     fGraphiteContext->submit(syncToCpu);
++    performContextCleanupLocked();
+   }
+ 
+   // Create offscreen surface
+@@ -316,6 +373,7 @@ public:
+     if (!recorderOptions.fImageProvider) {
+       auto imageProvider = ImageProvider::Make();
+       recorderOptions.fImageProvider = imageProvider;
++      recorderOptions.fGpuBudgetInBytes = _recorderBudget;
+     }
+     static thread_local auto recorder =
+         fGraphiteContext->makeRecorder(recorderOptions);
+@@ -330,6 +388,19 @@ private:
+   std::unique_ptr<skgpu::graphite::Context> fGraphiteContext;
+   skgpu::graphite::DawnBackendContext backendContext;
+   std::mutex _mutex;
++  std::atomic<size_t> _recorderBudget{kDefaultRecorderBudget};
++  std::chrono::steady_clock::time_point _lastContextCleanup;
++
++  // Same as performRecorderCleanup(), for the context. The caller holds
++  // _mutex.
++  void performContextCleanupLocked() {
++    auto now = std::chrono::steady_clock::now();
++    if (now - _lastContextCleanup < kPurgeInterval) {
++      return;
++    }
++    _lastContextCleanup = now;
++    fGraphiteContext->performDeferredCleanup(kPurgeResourcesUnusedFor);
++  }
+ 
+   DawnContext() {
+     // No dawnProcSetProcs() here: the monolithic libwebgpu_dawn (shared with
+@@ -366,6 +437,12 @@ private:
+     skgpu::graphite::ContextOptionsPriv contextOptionsPriv;
+     ctxOptions.fOptionsPriv = &contextOptionsPriv;
+     ctxOptions.fOptionsPriv->fStoreContextRefInRecorder = true;
++    ctxOptions.fGpuBudgetInBytes = kDefaultContextBudget;
++#ifdef __ANDROID__
++    // Adreno's Vulkan driver crashes in vkCreateFramebuffer when Graphite
++    // opens the multisampled render pass it uses for large and stroked paths.
++    ctxOptions.fInternalMultisampleCount = skgpu::graphite::SampleCount::k1;
++#endif
+     fGraphiteContext =
+         skgpu::graphite::ContextFactory::MakeDawn(backendContext, ctxOptions);
+ 
+diff --git a/cpp/rnskia/RNImageProvider.h b/cpp/rnskia/RNImageProvider.h
+index b4dff20..ffa50bd 100644
+--- a/cpp/rnskia/RNImageProvider.h
++++ b/cpp/rnskia/RNImageProvider.h
+@@ -1,5 +1,8 @@
+ #pragma once
+ 
++#include <chrono>
++#include <vector>
++
+ #include "include/core/SkCanvas.h"
+ #include "include/core/SkImage.h"
+ 
+@@ -26,6 +29,7 @@ public:
+   sk_sp<SkImage>
+   findOrCreate(skgpu::graphite::Recorder *recorder, const SkImage *image,
+                SkImage::RequiredProperties requiredProps) override {
++    purgeReleasedImages();
+     if (!requiredProps.fMipmapped) {
+       // If no mipmaps are required, check to see if we have a mipmapped version
+       // anyway - since it can be used in that case.
+@@ -35,7 +39,7 @@ public:
+       ImageKey mipMappedKey(image, /* mipmapped= */ true);
+       auto result = fCache.find(mipMappedKey);
+       if (result) {
+-        return *result;
++        return result->texture;
+       }
+     }
+ 
+@@ -43,7 +47,7 @@ public:
+ 
+     auto result = fCache.find(key);
+     if (result) {
+-      return *result;
++      return result->texture;
+     }
+ 
+     sk_sp<SkImage> newImage =
+@@ -52,14 +56,46 @@ public:
+       return nullptr;
+     }
+ 
+-    result = fCache.insert(key, std::move(newImage));
++    result = fCache.insert(key, Entry{sk_ref_sp(image), std::move(newImage)});
+     SkASSERT(result);
+ 
+-    return *result;
++    return result->texture;
+   }
+ 
+ private:
+   static constexpr int kDefaultNumCachedImages = 256;
++  static constexpr std::chrono::milliseconds kPurgeInterval{1000};
++
++  // The cache holds a reference to the source image next to its upload, so
++  // that it can tell when nothing else uses the source anymore.
++  struct Entry {
++    sk_sp<const SkImage> source;
++    sk_sp<SkImage> texture;
++  };
++
++  // Drops the uploads of images that only this cache still references: JS
++  // released them and no recording draws them. Without this, the uploads of
++  // up to kDefaultNumCachedImages images stay on the GPU for as long as the
++  // recorder lives, long after the images themselves are gone. Runs on the
++  // recorder's thread (from findOrCreate), at most once per kPurgeInterval.
++  void purgeReleasedImages() {
++    auto now = std::chrono::steady_clock::now();
++    if (now - fLastPurge < kPurgeInterval) {
++      return;
++    }
++    fLastPurge = now;
++    std::vector<ImageKey> released;
++    fCache.foreach ([&](const ImageKey *key, Entry *entry) {
++      if (entry->source->unique()) {
++        released.push_back(*key);
++      }
++    });
++    for (const auto &key : released) {
++      fCache.remove(key);
++    }
++  }
++
++  std::chrono::steady_clock::time_point fLastPurge;
+ 
+   class ImageKey {
+   public:
+@@ -94,7 +130,7 @@ private:
+     size_t operator()(const ImageKey &key) const { return key.hash(); }
+   };
+ 
+-  SkLRUCache<ImageKey, sk_sp<SkImage>, ImageHash> fCache;
++  SkLRUCache<ImageKey, Entry, ImageHash> fCache;
+ };
+ 
+ } // namespace RNSkia
+\ No newline at end of file
+diff --git a/cpp/rnskia/RNSkGraphiteProducer.cpp b/cpp/rnskia/RNSkGraphiteProducer.cpp
+index ed67851..607214c 100644
+--- a/cpp/rnskia/RNSkGraphiteProducer.cpp
++++ b/cpp/rnskia/RNSkGraphiteProducer.cpp
+@@ -37,6 +37,8 @@ void RNSkGraphiteProducer::setTarget(
+     std::shared_ptr<RNSkGraphiteTarget> target) {
+   std::lock_guard<std::mutex> lock(_mutex);
+   _target = std::move(target);
++  // A frame presented on the previous target says nothing about this one.
++  _presentPending = false;
+   _dirty = true;
+   kickLocked();
+ }
+@@ -179,6 +181,13 @@ void RNSkGraphiteProducer::produce() {
+   }
+   std::lock_guard<std::mutex> lock(_mutex);
+   _inFlight = false;
++  if (recording != nullptr && target != _target) {
++    // The target was replaced or released while recording: the frame was
++    // recorded for a view that is gone. Record the content again for the
++    // current target, if any.
++    recording = nullptr;
++    _dirty = true;
++  }
+   if (recording != nullptr) {
+     // The next job starts when this frame is on screen. Submitted under the
+     // lock: a frame presented in between (a redraw replaying the last one)
+diff --git a/cpp/rnskia/RNSkGraphiteTarget.h b/cpp/rnskia/RNSkGraphiteTarget.h
+index 05b520a..887e7e9 100644
+--- a/cpp/rnskia/RNSkGraphiteTarget.h
++++ b/cpp/rnskia/RNSkGraphiteTarget.h
+@@ -1,5 +1,6 @@
+ #pragma once
+ 
++#include <chrono>
+ #include <cmath>
+ #include <deque>
+ #include <functional>
+@@ -196,6 +197,9 @@ public:
+       throw std::runtime_error(
+           "SkiaGraphiteView: snapping the recording failed.");
+     }
++    // The recorder is only used under this lock, and no recording is open.
++    DawnContext::getInstance().performRecorderCleanup(_recorder->recorder.get(),
++                                                      _lastRecorderCleanup);
+     return std::make_shared<RNSkGraphiteRecording>(
+         _recorder, std::move(recording), _recordingTarget);
+   }
+@@ -250,6 +254,27 @@ public:
+     _requestFrame = nullptr;
+   }
+ 
++  /**
++   Releases the recorder, with its GPU resource cache, and the recordings
++   waiting to be presented: the view is gone. A recording still open keeps
++   the recorder; the next beginRecording() creates a new one.
++   */
++  void releaseRecorder() {
++    std::deque<std::shared_ptr<RNSkGraphiteRecording>> queue;
++    std::shared_ptr<RNSkGraphiteRecorder> recorder;
++    {
++      std::lock_guard<std::mutex> lock(_stateMutex);
++      if (!_recording) {
++        recorder = std::move(_recorder);
++      }
++    }
++    {
++      std::lock_guard<std::mutex> lock(_queueMutex);
++      queue.swap(_queue);
++    }
++    // Both are released here, outside the locks.
++  }
++
+   /** Takes every recording submitted since the last call, in order. */
+   std::vector<std::shared_ptr<RNSkGraphiteRecording>> takeQueued() {
+     std::lock_guard<std::mutex> lock(_queueMutex);
+@@ -342,6 +367,7 @@ private:
+   std::mutex _stateMutex;
+   std::shared_ptr<RNSkGraphiteRecorder> _recorder;
+   bool _recording = false;
++  std::chrono::steady_clock::time_point _lastRecorderCleanup;
+   RNSkGraphiteTargetInfo _recordingTarget;
+   std::weak_ptr<RNSkWindowSurface> _surface;
+   float _layoutWidth = 0;
+diff --git a/cpp/rnskia/RNSkView.h b/cpp/rnskia/RNSkView.h
+index a4c9a09..8298e42 100644
+--- a/cpp/rnskia/RNSkView.h
++++ b/cpp/rnskia/RNSkView.h
+@@ -143,9 +143,26 @@ public:
+    Releases the content the view draws without scheduling a frame: the host
+    view is torn down. On Android the native view outlives the Java view
+    until it is finalized, so the resources go away here rather than with the
+-   garbage collector.
++   garbage collector: the content, and the target with its recorder, whose
++   GPU resource cache can hold up to the recorder's whole budget. A view
++   registered again (a recycled view) gets a new target from setNativeId().
+    */
+-  void releaseContent() { _producer->clear(); }
++  void releaseContent() {
++    _producer->clear();
++    _producer->setTarget(nullptr);
++    std::shared_ptr<RNSkGraphiteTarget> target;
++    {
++      std::lock_guard<std::mutex> lock(_mutex);
++      target = std::move(_target);
++      _lastPresented = nullptr;
++    }
++    if (target) {
++      target->detach(_surface);
++      // A JS object may still hold the target (SkiaViewApi
++      // makeGraphiteContext): drop what it keeps for the view.
++      target->releaseRecorder();
++    }
++  }
+ 
+   /** Schedules redraw() on the main thread, once. */
+   void requestRedraw() {
+diff --git a/cpp/rnskia/RNSkWindowSurface.cpp b/cpp/rnskia/RNSkWindowSurface.cpp
+index 18d3df3..c405144 100644
+--- a/cpp/rnskia/RNSkWindowSurface.cpp
++++ b/cpp/rnskia/RNSkWindowSurface.cpp
+@@ -257,6 +257,8 @@ bool RNSkWindowSurface::presentImage(const sk_sp<SkImage> &image) {
+     throw std::runtime_error("Failed to create graphite recording");
+   }
+   DawnContext::getInstance().submitRecording(recording.get());
++  DawnContext::getInstance().performRecorderCleanup(_recorder,
++                                                    _lastRecorderCleanup);
+ #ifdef __APPLE__
+   dawn::native::metal::WaitForCommandsToBeScheduled(_device.Get());
+ #endif
+diff --git a/cpp/rnskia/RNSkWindowSurface.h b/cpp/rnskia/RNSkWindowSurface.h
+index ee5bda2..bfcefcc 100644
+--- a/cpp/rnskia/RNSkWindowSurface.h
++++ b/cpp/rnskia/RNSkWindowSurface.h
+@@ -1,5 +1,6 @@
+ #pragma once
+ 
++#include <chrono>
+ #include <functional>
+ #include <mutex>
+ #include <utility>
+@@ -150,6 +151,7 @@ private:
+   // presentImage() draws on it, presentRecordings() only wraps the swapchain
+   // texture for it.
+   skgpu::graphite::Recorder *_recorder = nullptr;
++  std::chrono::steady_clock::time_point _lastRecorderCleanup;
+   void *_nativeHandle = nullptr;
+   Releaser _releaser;
+   int _width = 0;
+diff --git a/src/skia/types/Skia.ts b/src/skia/types/Skia.ts
+index f2bd986..c42dfd4 100644
+--- a/src/skia/types/Skia.ts
++++ b/src/skia/types/Skia.ts
+@@ -105,4 +105,15 @@ export interface Skia {
+    * device (zero-copy interop). Native only.
+    */
+   getNativeDevice(): bigint;
++  /**
++   * Sets the GPU resource cache budgets, in bytes: `recorderBytes` for the
++   * cache of each canvas (each has its own Graphite recorder), `contextBytes`
++   * for the cache shared by all of them. Resources unused for a few seconds
++   * are purged regardless of the budgets. Defaults: 32 MB per recorder,
++   * 64 MB for the context. Native only.
++   */
++  setResourceCacheLimits(limits: {
++    recorderBytes?: number;
++    contextBytes?: number;
++  }): void;
+ }
+diff --git a/src/skia/web/JsiSkia.ts b/src/skia/web/JsiSkia.ts
+index fbaa4fb..1094337 100644
+--- a/src/skia/web/JsiSkia.ts
++++ b/src/skia/web/JsiSkia.ts
+@@ -138,4 +138,7 @@ export const JsiSkApi = (CanvasKit: CanvasKit): Skia => ({
+   getNativeDevice: () => {
+     return throwNotImplementedOnRNWeb<bigint>();
+   },
++  setResourceCacheLimits: () => {
++    // CanvasKit manages its own WebGL resource cache.
++  },
+ });

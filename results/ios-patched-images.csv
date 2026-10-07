@@ -1,0 +1,14 @@
+elapsed_s,scenario,phase,app_state,footprint_mb,graphics_mb
+0,images-600,start,inactive,28.2,-0.0
+10,images-600,start,active,151.7,-0.0
+20,images-600,start,active,145.6,-0.0
+30,images-600,start,active,137.9,-0.0
+40,images-600,drawn-idle,active,135.1,-0.0
+50,images-600,drawn-idle,active,85.7,-0.0
+60,images-600,drawn-idle,active,80.0,-0.0
+70,images-600,drawn-idle,active,73.3,-0.0
+80,images-600,unmounted-idle,active,43.2,-0.0
+90,images-600,unmounted-idle,active,40.7,-0.0
+100,images-600,unmounted-idle,active,41.1,-0.0
+110,images-600,unmounted-idle,active,41.8,-0.0
+120,images-600,unmounted-idle,active,42.1,-0.0
